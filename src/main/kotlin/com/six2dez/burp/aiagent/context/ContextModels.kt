@@ -35,3 +35,8 @@ data class AuditIssueItem(
     val remediation: String?,
     val affectedHost: String?
 ) : BurpContextItem
+
+data class ApiSpecItem(
+    val spec: com.six2dez.burp.aiagent.context.openapi.OpenApiSpec,
+    val analysisTimestamp: Long = System.currentTimeMillis()
+) : BurpContextItem
