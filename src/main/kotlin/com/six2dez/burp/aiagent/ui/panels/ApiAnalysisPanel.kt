@@ -210,6 +210,8 @@ class ApiAnalysisPanel(
     }
     
     private fun loadSpecFromFile(file: File) {
+        // TODO: Añadir comprobación de número de peticiones por usuario/IP (rate limiting)
+        // Ver Security.md y vulns.md
         setProgress(true, "Loading ${file.name}...")
         thread {
             val result = parser.parseFromFile(file.absolutePath)
@@ -219,6 +221,8 @@ class ApiAnalysisPanel(
                     setStatus("Loaded: ${spec.title}")
                 }.onFailure { error ->
                     setStatus("Error: ${error.message}")
+                    // TODO: Mostrar mensajes de error genéricos al usuario y registrar detalles solo en logs internos.
+                    // Referencia: Security.md (sección 6), vulns.md (vulnerabilidad 4)
                     JOptionPane.showMessageDialog(
                         root,
                         "Failed to parse OpenAPI spec:\n${error.message}",
@@ -337,17 +341,8 @@ class ApiAnalysisPanel(
     }
     
     private fun analyzeWithAI() {
-        val spec = currentSpec
-        if (spec == null) {
-            JOptionPane.showMessageDialog(
-                root,
-                "Please load an OpenAPI specification first.",
-                "No Spec Loaded",
-                JOptionPane.WARNING_MESSAGE
-            )
-            return
-        }
-        
+        // TODO: Limitar la frecuencia de análisis por usuario/IP (rate limiting)
+        // Ver Security.md y vulns.md
         setProgress(true, "Analyzing with AI...")
         thread {
             try {
@@ -356,9 +351,7 @@ class ApiAnalysisPanel(
                     deterministic = true,
                     hostSalt = "api-analysis"
                 )
-                
                 val context = contextCollector.fromApiSpec(spec, options)
-                
                 val prompt = buildString {
                     appendLine("Analyze this OpenAPI specification for security vulnerabilities and design issues.")
                     appendLine()
@@ -372,11 +365,8 @@ class ApiAnalysisPanel(
                     appendLine()
                     appendLine("Provide specific findings with severity levels and remediation steps.")
                 }
-                
                 SwingUtilities.invokeLater {
-                    // Add context to supervisor and let user send via chat
                     chatPanel.loadContext(context)
-                    
                     setProgress(false)
                     setStatus("Analysis ready - use Chat to send")
                 }

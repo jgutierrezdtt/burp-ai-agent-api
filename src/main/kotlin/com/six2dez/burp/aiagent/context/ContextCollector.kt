@@ -24,6 +24,8 @@ class ContextCollector(private val api: MontoyaApi) {
     private val dataClassifier = DataClassifier()
 
     fun fromRequestResponses(rr: List<HttpRequestResponse>, options: ContextOptions): ContextCapture {
+        // TODO: Revisar que la redacción y anonimización se apliquen siempre antes de loggear o enviar datos a la IA.
+        // Referencia: Security.md (sección 3 y 5), vulns.md (vulnerabilidad 3 y 7)
         val policy = RedactionPolicy.fromMode(options.privacyMode)
         val items = rr.map { item ->
             val req = item.request().toString()
@@ -55,6 +57,8 @@ class ContextCollector(private val api: MontoyaApi) {
     }
 
     fun fromAuditIssues(issues: List<AuditIssue>, options: ContextOptions): ContextCapture {
+        // TODO: Añadir validación de roles y permisos antes de procesar contextos sensibles.
+        // Referencia: Security.md (sección 2), vulns.md (vulnerabilidad 2)
         val policy = RedactionPolicy.fromMode(options.privacyMode)
         val items = issues.map { i ->
             val host = i.httpService()?.host()

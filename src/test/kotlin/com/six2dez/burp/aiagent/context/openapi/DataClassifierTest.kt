@@ -246,4 +246,7 @@ class DataClassifierTest {
             assertEquals(DataCategory.PII, classification!!.category, "Field $fieldName should be PII category")
         }
     }
+    
+    // TODO: Añadir tests de lógica de negocio para flujos multi-step y validación de estados.
+    // Referencia: Security.md (sección 10), vulns.md (vulnerabilidad 5)
 }

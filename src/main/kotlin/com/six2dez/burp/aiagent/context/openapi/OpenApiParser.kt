@@ -22,6 +22,8 @@ class OpenApiParser {
      * Parse OpenAPI spec from a local file path.
      */
     fun parseFromFile(filePath: String): Result<OpenApiSpec> {
+        // TODO: Validar estructura y autenticidad de payloads externos antes de procesar.
+        // Referencia: Security.md (sección 9), vulns.md (vulnerabilidad 6)
         return try {
             val file = File(filePath)
             if (!file.exists()) {
