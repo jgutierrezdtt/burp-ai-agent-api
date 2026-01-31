@@ -10,6 +10,10 @@ import com.six2dez.burp.aiagent.redact.PrivacyMode
 import com.six2dez.burp.aiagent.supervisor.AgentSupervisor
 import com.six2dez.burp.aiagent.ui.ChatPanel
 import com.six2dez.burp.aiagent.ui.UiTheme
+import com.six2dez.burp.aiagent.util.RateLimiter
+import com.six2dez.burp.aiagent.util.AuditLogger
+import java.security.MessageDigest
+import java.nio.charset.StandardCharsets
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.GridBagConstraints
@@ -30,6 +34,12 @@ class ApiAnalysisPanel(
     private val contextCollector: ContextCollector,
     private val chatPanel: ChatPanel
 ) {
+    companion object {
+        // Global rate limiter for analysis actions (in-memory)
+        private val ANALYSIS_RATE_LIMITER = RateLimiter(capacity = 5, refillTokens = 5, refillIntervalMillis = 60_000)
+        private const val ANALYSIS_KEY = "api-analysis-global"
+        private const val API_SPEC_SIZE_LIMIT = 500
+    }
     private val parser = OpenApiParser()
     private var currentSpec: OpenApiSpec? = null
     
@@ -173,47 +183,65 @@ class ApiAnalysisPanel(
         // Center panel: split pane with table and detail
         val tableScroll = JScrollPane(endpointTable).apply {
             preferredSize = Dimension(800, 300)
-        }
-        
-        val detailScroll = JScrollPane(detailArea).apply {
-            preferredSize = Dimension(800, 150)
-        }
-        
-        val splitPane = JSplitPane(JSplitPane.VERTICAL_SPLIT, tableScroll, detailScroll).apply {
-            resizeWeight = 0.7
-            dividerLocation = 350
-        }
-        
-        // Bottom panel: progress and status
-        val bottomPanel = JPanel(BorderLayout()).apply {
-            background = UiTheme.Colors.surface
-            border = BorderFactory.createEmptyBorder(5, 10, 5, 10)
-            add(progressBar, BorderLayout.NORTH)
-            add(statusLabel, BorderLayout.SOUTH)
-        }
-        
-        // Assemble
-        root.add(topPanel, BorderLayout.NORTH)
-        root.add(splitPane, BorderLayout.CENTER)
-        root.add(bottomPanel, BorderLayout.SOUTH)
-    }
-    
-    private fun setupListeners() {
-        endpointTable.selectionModel.addListSelectionListener { event ->
-            if (!event.valueIsAdjusting) {
-                val selectedRow = endpointTable.selectedRow
-                if (selectedRow >= 0) {
-                    showEndpointDetail(selectedRow)
-                }
-            }
-        }
-    }
-    
-    private fun loadSpecFromFile(file: File) {
-        // TODO: Añadir comprobación de número de peticiones por usuario/IP (rate limiting)
-        // Ver Security.md y vulns.md
-        setProgress(true, "Loading ${file.name}...")
-        thread {
+                    setProgress(true, "Analyzing with AI...")
+                    thread {
+                        try {
+                            // Safety check: avoid analyzing extremely large specs without review
+                            if (spec.endpoints.size > 1000) {
+                                SwingUtilities.invokeLater {
+                                    JOptionPane.showMessageDialog(
+                                        root,
+                                        "Specification too large to analyze automatically (>${1000} endpoints). Please split or review manually.",
+                                        "Spec Too Large",
+                                        JOptionPane.WARNING_MESSAGE
+                                    )
+                                    setProgress(false)
+                                    setStatus("Spec too large for automatic analysis")
+                                }
+                                return@thread
+                            }
+
+                            val options = ContextOptions(
+                                privacyMode = PrivacyMode.STRICT,
+                                deterministic = true,
+                                hostSalt = "api-analysis"
+                            )
+
+                            // Build redacted context for AI
+                            val context = contextCollector.fromApiSpec(spec, options)
+
+                            // Analyze flows locally before sending to AI
+                            val flows = com.six2dez.burp.aiagent.context.openapi.ApiFlowAnalyzer.analyze(spec)
+
+                            val flowSummary = buildString {
+                                appendLine("Detected ${'$'}{flows.size} flows")
+                                flows.forEachIndexed { idx, flow ->
+                                    appendLine("${'$'}{idx + 1}. ${'$'}{flow.name} (${ '$' }{flow.steps.size} steps) - Roles: ${'$'}{flow.requiredRoles}")
+                                }
+                            }
+
+                            SwingUtilities.invokeLater {
+                                // Add redacted context to chat panel and display flow summary in detail area
+                                chatPanel.loadContext(context)
+                                detailArea.text = """
+                                    Analysis context prepared and loaded to Chat.
+
+                                    ${flowSummary}
+
+                                    Use the Chat to request deeper AI analysis or create issues from findings.
+                                """.trimIndent()
+
+                                setProgress(false)
+                                setStatus("Analysis ready - ${'$'}{flows.size} flows detected")
+                            }
+                        } catch (e: Exception) {
+                            SwingUtilities.invokeLater {
+                                setProgress(false)
+                                setStatus("Error: ${'$'}{e.message}")
+                                api.logging().logToError("API analysis error: ${'$'}{e.message}")
+                            }
+                        }
+                    }
             val result = parser.parseFromFile(file.absolutePath)
             SwingUtilities.invokeLater {
                 result.onSuccess { spec ->
@@ -341,17 +369,68 @@ class ApiAnalysisPanel(
     }
     
     private fun analyzeWithAI() {
-        // TODO: Limitar la frecuencia de análisis por usuario/IP (rate limiting)
-        // Ver Security.md y vulns.md
+        // Rate limiting: protect against rapid repeated analyses from the UI
+        if (!ANALYSIS_RATE_LIMITER.tryAcquire(ANALYSIS_KEY)) {
+            SwingUtilities.invokeLater {
+                JOptionPane.showMessageDialog(
+                    root,
+                    "Too many analysis requests. Please wait a moment and try again.",
+                    "Rate Limit",
+                    JOptionPane.WARNING_MESSAGE
+                )
+                setStatus("Rate limit exceeded for analysis")
+            }
+            AuditLogger.logEvent(api, null, "analysis_rate_limited", "Rate limit hit for key=$ANALYSIS_KEY", "WARN")
+            return
+        }
+
         setProgress(true, "Analyzing with AI...")
         thread {
             try {
+                val spec = currentSpec
+                if (spec == null) {
+                    SwingUtilities.invokeLater {
+                        JOptionPane.showMessageDialog(root, "No specification loaded.", "API Analysis", JOptionPane.WARNING_MESSAGE)
+                        setProgress(false)
+                        setStatus("No spec loaded for analysis")
+                    }
+                    AuditLogger.logEvent(api, null, "analysis_no_spec", "User attempted analysis without a loaded spec", "WARN")
+                    return@thread
+                }
+
+                // Size threshold enforcement
+                if (spec.endpoints.size > API_SPEC_SIZE_LIMIT) {
+                    SwingUtilities.invokeLater {
+                        JOptionPane.showMessageDialog(
+                            root,
+                            "Specification too large to analyze automatically (>${API_SPEC_SIZE_LIMIT} endpoints). Please split or review manually.",
+                            "Spec Too Large",
+                            JOptionPane.WARNING_MESSAGE
+                        )
+                        setProgress(false)
+                        setStatus("Spec too large for automatic analysis")
+                    }
+                    AuditLogger.logEvent(api, null, "analysis_rejected_size", "spec_endpoints=${spec.endpoints.size}", "WARN")
+                    return@thread
+                }
+
                 val options = ContextOptions(
                     privacyMode = PrivacyMode.BALANCED,
                     deterministic = true,
-                    hostSalt = "api-analysis"
+                    hostSalt = "api-analysis",
+                    requesterId = null,
+                    requesterRoles = emptySet()
                 )
+
                 val context = contextCollector.fromApiSpec(spec, options)
+
+                // Compute a short context hash for auditability (no sensitive data)
+                val ctxHash = try {
+                    val digest = MessageDigest.getInstance("SHA-256").digest(context.contextJson.toByteArray(StandardCharsets.UTF_8))
+                    digest.take(8).joinToString("") { "%02x".format(it) }
+                } catch (e: Exception) { "unknown" }
+                AuditLogger.logEvent(api, options.requesterId, "analysis_prepared", "endpoints=${spec.endpoints.size}, ctxHash=$ctxHash")
+
                 val prompt = buildString {
                     appendLine("Analyze this OpenAPI specification for security vulnerabilities and design issues.")
                     appendLine()
@@ -365,17 +444,20 @@ class ApiAnalysisPanel(
                     appendLine()
                     appendLine("Provide specific findings with severity levels and remediation steps.")
                 }
+
                 SwingUtilities.invokeLater {
                     chatPanel.loadContext(context)
                     setProgress(false)
                     setStatus("Analysis ready - use Chat to send")
                 }
+                AuditLogger.logEvent(api, options.requesterId, "analysis_ready", "endpoints=${spec.endpoints.size}, ctxHash=$ctxHash")
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
                     setProgress(false)
                     setStatus("Error: ${e.message}")
                     api.logging().logToError("API analysis error: ${e.message}")
                 }
+                AuditLogger.logEvent(api, null, "analysis_error", "${e.message}", "ERROR")
             }
         }
     }

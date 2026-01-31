@@ -1,0 +1,16 @@
+[
+  {
+    "name":"User Registration Flow",
+    "steps":[{"path":"/register","method":"POST","stepNumber":1},{"path":"/verify","method":"POST","stepNumber":2}],
+    "requiredRoles":[],
+    "dataFlow":[{"fromStep":1,"toStep":2,"dataField":"userId","required":true}],
+    "risks":[{"severity":"HIGH","description":"Email enumeration via registration endpoint"}]
+  },
+  {
+    "name":"Order Checkout Flow",
+    "steps":[{"path":"/cart/checkout","method":"POST","stepNumber":1},{"path":"/payments","method":"POST","stepNumber":2}],
+    "requiredRoles":["user"],
+    "dataFlow":[{"fromStep":1,"toStep":2,"dataField":"orderId","required":true}],
+    "risks":[{"severity":"MEDIUM","description":"Missing rate limiting on checkout may enable automated purchase abuse"}]
+  }
+]

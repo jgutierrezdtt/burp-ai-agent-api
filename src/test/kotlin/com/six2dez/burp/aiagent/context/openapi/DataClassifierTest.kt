@@ -1,5 +1,43 @@
 package com.six2dez.burp.aiagent.context.openapi
 
+import com.six2dez.burp.aiagent.redact.PrivacyMode
+import com.six2dez.burp.aiagent.supervisor.AgentClient
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Test
+
+class FakeAgentClient(private val response: String) : AgentClient {
+    override fun sendSync(prompt: String, contextJson: String?, privacyMode: PrivacyMode, deterministic: Boolean, timeoutMs: Long): Result<String> {
+        return Result.success(response)
+    }
+}
+
+class DataClassifierTest {
+    @Test
+    fun `ai classification parsed correctly`() {
+        val resourceStream = javaClass.getResourceAsStream("/golden/data-classification.json")
+            ?: throw IllegalStateException("Golden file not found")
+        val fakeResponse = resourceStream.bufferedReader().use { it.readText() }
+
+        val client = FakeAgentClient(fakeResponse)
+        val classifier = DataClassifier(agentClient = client)
+
+        val spec = OpenApiSpec(
+            version = "3.0.0",
+            title = "Test API",
+            endpoints = listOf(
+                ApiEndpoint(path = "/users", method = "POST", parameters = listOf())
+            )
+        )
+
+        val result = classifier.classifySpecWithAi(spec, PrivacyMode.BALANCED, deterministic = true)
+        assertEquals(3, result.size)
+        assertEquals("/users.POST.body.email", result[0].fieldPath)
+        assertEquals(DataCategory.PII, result[0].category)
+        assertEquals(SensitivityLevel.HIGH, result[0].sensitivity)
+    }
+}
+package com.six2dez.burp.aiagent.context.openapi
+
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 

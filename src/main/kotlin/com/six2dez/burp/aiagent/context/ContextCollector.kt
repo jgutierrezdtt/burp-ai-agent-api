@@ -10,6 +10,9 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import com.six2dez.burp.aiagent.context.openapi.OpenApiSpec
 import com.six2dez.burp.aiagent.context.openapi.DataClassifier
 import com.six2dez.burp.aiagent.redact.Redaction
+import com.six2dez.burp.aiagent.util.AuditLogger
+import java.security.MessageDigest
+import java.nio.charset.StandardCharsets
 import com.six2dez.burp.aiagent.redact.RedactionPolicy
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -114,7 +117,20 @@ class ContextCollector(private val api: MontoyaApi) {
      */
     fun fromApiSpec(spec: OpenApiSpec, options: ContextOptions): ContextCapture {
         // Apply data classification
-        val classifiedSpec = dataClassifier.classifySpec(spec)
+        // RBAC: if caller does not have privileged role, omit high/critical endpoints from exported context
+        val privileged = options.requesterRoles.contains("admin") || options.requesterRoles.contains("api_analyst")
+        val specToClassify = if (privileged) spec else {
+            // Create a filtered copy removing HIGH/CRITICAL sensitivity endpoints
+            val allowed = spec.endpoints.filter { it.dataSensitivity.ordinal < com.six2dez.burp.aiagent.context.openapi.SensitivityLevel.HIGH.ordinal }
+            spec.copy(endpoints = allowed)
+        }
+
+        // Log RBAC filtering event if applied
+        if (!privileged) {
+            AuditLogger.logEvent(api, options.requesterId, "rbac_filter_applied", "original=${spec.endpoints.size}, filtered=${specToClassify.endpoints.size}", "WARN")
+        }
+
+        val classifiedSpec = dataClassifier.classifySpec(specToClassify)
         
         // Wrap in ApiSpecItem
         val item = ApiSpecItem(
@@ -129,6 +145,21 @@ class ContextCollector(private val api: MontoyaApi) {
         
         val json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(env)
         val preview = buildApiSpecPreview(classifiedSpec, options.deterministic)
+
+        // Compute short hash for auditability and log creation
+        val ctxHash = try {
+            val digest = MessageDigest.getInstance("SHA-256").digest(json.toByteArray(StandardCharsets.UTF_8))
+            digest.take(8).joinToString("") { "%02x".format(it) }
+        } catch (e: Exception) { "unknown" }
+        AuditLogger.logEvent(api, options.requesterId, "context_created", "endpoints=${classifiedSpec.endpoints.size}, ctxHash=$ctxHash")
+
+        var finalPreview = preview
+        if (!privileged) {
+            finalPreview = finalPreview + "\nWARNING: Some sensitive endpoints were omitted due to insufficient permissions."
+        }
+
+        return ContextCapture(contextJson = json, previewText = finalPreview)
+        }
         
         return ContextCapture(contextJson = json, previewText = preview)
     }

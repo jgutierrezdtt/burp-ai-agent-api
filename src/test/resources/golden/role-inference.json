@@ -1,0 +1,10 @@
+{
+  "roles":[
+    {"name":"admin","description":"Administrator","scopes":["admin:*"],"allowedEndpoints":["/admin/*"]},
+    {"name":"user","description":"Regular authenticated user","scopes":["user:read"],"allowedEndpoints":["/users/{id}","/orders"]}
+  ],
+  "accessMatrix":[
+    {"endpoint":"/users/{id}","method":"DELETE","allowedRoles":["admin"],"confidence":0.95},
+    {"endpoint":"/orders","method":"POST","allowedRoles":["user"],"confidence":0.9}
+  ]
+}

@@ -1,0 +1,5 @@
+[
+  {"fieldPath":"/users.POST.body.email","category":"PII","sensitivity":"HIGH","reason":"User email address field","confidence":0.95},
+  {"fieldPath":"/users.POST.body.password","category":"AUTH","sensitivity":"CRITICAL","reason":"Password field used for authentication","confidence":0.99},
+  {"fieldPath":"/payments.POST.body.cardNumber","category":"FINANCIAL","sensitivity":"CRITICAL","reason":"Credit card number","confidence":0.98}
+]

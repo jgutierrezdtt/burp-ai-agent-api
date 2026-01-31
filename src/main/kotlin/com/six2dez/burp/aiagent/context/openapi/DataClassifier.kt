@@ -1,5 +1,70 @@
 package com.six2dez.burp.aiagent.context.openapi
 
+import com.fasterxml.jackson.databind.SerializationFeature
+import com.fasterxml.jackson.databind.json.JsonMapper
+import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import com.six2dez.burp.aiagent.supervisor.AgentClient
+import com.six2dez.burp.aiagent.redact.PrivacyMode
+import java.time.Instant
+
+/**
+ * DataClassifier delegates classification to an AI agent via AgentClient.
+ * It builds a deterministic, redacted context and parses a JSON response with classifications.
+ */
+class DataClassifier(private val agentClient: AgentClient? = null) {
+    private val mapper = JsonMapper.builder()
+        .enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
+        .build()
+        .registerKotlinModule()
+
+    data class ClassificationRequest(
+        val requestId: String,
+        val specSummary: OpenApiSpecSummary
+    )
+
+    data class OpenApiSpecSummary(
+        val title: String,
+        val version: String,
+        val endpoints: List<EndpointSummary>
+    )
+
+    data class EndpointSummary(val path: String, val method: String, val parameters: List<String>)
+
+    /**
+     * Ask the agent to classify fields in the spec. Returns an empty list on error or if no agentClient is provided.
+     */
+    fun classifySpecWithAi(spec: OpenApiSpec, privacyMode: PrivacyMode, deterministic: Boolean, timeoutMs: Long = 10_000L): List<DataClassification> {
+        if (agentClient == null) return emptyList()
+
+        val summary = OpenApiSpecSummary(
+            title = spec.title,
+            version = spec.version,
+            endpoints = spec.endpoints.map { ep -> EndpointSummary(ep.path, ep.method, ep.parameters.map { it.name }) }
+        )
+
+        val req = ClassificationRequest(requestId = "req-${Instant.now().toEpochMilli()}", specSummary = summary)
+        val contextJson = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(req)
+
+        val prompt = buildString {
+            appendLine("ANALYZE_SPEC_FOR_DATA_CLASSIFICATION")
+            appendLine("Respond with JSON array of objects: {fieldPath, category, sensitivity, reason, confidence}")
+            appendLine("Only output valid JSON.")
+        }
+
+        val res = agentClient.sendSync(prompt = prompt, contextJson = contextJson, privacyMode = privacyMode, deterministic = deterministic, timeoutMs = timeoutMs)
+        if (res.isFailure) return emptyList()
+
+        val text = res.getOrNull().orEmpty().trim()
+        return try {
+            // Expecting a JSON array
+            mapper.readValue(text, mapper.typeFactory.constructCollectionType(List::class.java, DataClassification::class.java))
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+}
+package com.six2dez.burp.aiagent.context.openapi
+
 /**
  * Classifier for API data fields and endpoints.
  * Uses deterministic rules to identify sensitive data categories.

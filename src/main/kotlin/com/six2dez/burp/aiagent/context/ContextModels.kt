@@ -8,7 +8,9 @@ data class ContextCapture(
 data class ContextOptions(
     val privacyMode: com.six2dez.burp.aiagent.redact.PrivacyMode,
     val deterministic: Boolean,
-    val hostSalt: String
+    val hostSalt: String,
+    val requesterId: String? = null,
+    val requesterRoles: Set<String> = emptySet()
 )
 
 data class BurpContextEnvelope(

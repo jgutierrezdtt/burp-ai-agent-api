@@ -8,6 +8,8 @@ import com.six2dez.burp.aiagent.context.ContextCapture
 import com.six2dez.burp.aiagent.mcp.McpSupervisor
 import com.six2dez.burp.aiagent.supervisor.AgentSupervisor
 import com.six2dez.burp.aiagent.ui.components.DependencyBanner
+import com.six2dez.burp.aiagent.context.ContextCollector
+import com.six2dez.burp.aiagent.ui.panels.ApiAnalysisPanel
 import com.six2dez.burp.aiagent.ui.components.ToggleSwitch
 import java.awt.BorderLayout
 import java.awt.Dimension
@@ -36,6 +38,7 @@ class MainTab(
     val root: JComponent = JPanel(BorderLayout())
     private lateinit var settingsPanel: SettingsPanel
     private lateinit var chatPanel: ChatPanel
+    private val apiAnalysisPanel: ApiAnalysisPanel
 
     private val mcpToggle = ToggleSwitch()
     private val passiveToggle = ToggleSwitch()
@@ -75,6 +78,8 @@ class MainTab(
             onStatusChanged = { refreshStatus() },
             onResponseReady = { notifyResponseReady() }
         )
+        // Create API analysis panel (will be attached as a sibling tab when the parent tabbed pane is available)
+        apiAnalysisPanel = ApiAnalysisPanel(api, supervisor, ContextCollector(api), chatPanel)
         root.background = UiTheme.Colors.surface
 
         val top = HeaderPanel()
@@ -216,6 +221,14 @@ class MainTab(
         if (tabbedPane != null) return tabbedPane
         val pane = findParentTabbedPane() ?: return null
         tabbedPane = pane
+        // Attach API Analysis tab if not already present
+        try {
+            if (pane.indexOfComponent(apiAnalysisPanel.root) < 0) {
+                pane.addTab("API Analysis", apiAnalysisPanel.root)
+            }
+        } catch (_: Exception) {
+            // best-effort: if adding fails, ignore
+        }
         pane.addChangeListener {
             if (pane.selectedComponent == root) {
                 setAttention(false)
